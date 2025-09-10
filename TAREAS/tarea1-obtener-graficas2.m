@@ -1,3 +1,4 @@
+% INCISO B
 clc; clear; close all;
 
 % ==========================
@@ -14,16 +15,16 @@ x_tau = interp1(tau_orig, x_orig, tau, 'linear');
 % ==========================
 % 2. Definir transformación g(t)
 % ==========================
-t = linspace(-10, 10, 2000);   % rango amplio en el eje t
+t = linspace(-10, 10, 2000);
 
 % Cambio de variable: tau = -3/2 * (t + 8/3)
-tau_trans = -1.5 * (t + 8/3);
+tau_trans = (3/7) * t - 3/4;
 
 % Evaluar x en tau_trans (fuera del dominio => 0)
 x_tau_trans = interp1(tau_orig, x_orig, tau_trans, 'linear', 0);
 
 % Definir g(t)
-g_t = -x_tau_trans + 1;
+h_t = 2 * x_tau_trans + 0;
 
 % ==========================
 % 3. Graficar resultados
@@ -38,7 +39,7 @@ title('Señal Original x(\tau)');
 xlabel('\tau'); ylabel('x(\tau)');
 
 subplot(2,1,2);
-plot(t, g_t, 'm', 'LineWidth', 2);
+plot(t, h_t, 'm', 'LineWidth', 2);
 grid on;
-title('Señal Transformada g(t) = -x(-3/2 (t+8/3)) + 1');
-xlabel('t'); ylabel('g(t)');
+title('Señal Transformada h(t) = 2x(3t/7 - 3/4)');
+xlabel('t'); ylabel('h(t)');
