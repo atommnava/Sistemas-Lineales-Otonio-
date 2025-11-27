@@ -1,115 +1,131 @@
 function demoduladorCancion
-% demoduladorCancion - Carga un MP3 de música, lo modula en AM, lo demodula
-% con multiplicador y recupera el mensaje con filtrado. El script es robusto:
-% - verifica existencia del archivo (si no encuentra, abre diálogo)
-% - si Fs original no permite la portadora elegida, remuestrea automáticamente
-% - muestra gráficas en tiempo y frecuencia
-%
-% Nota: coloca tu archivo .mp3 en la carpeta que elijas o selecciónalo en el diálogo.
+% demoduladorCancion.m (versión corregida)
+% Modula un archivo MP3 en AM, lo demodula con multiplicador y recupera
+% el mensaje mediante filtrado FIR. Corrige errores de dimensiones en las FFT
+% y garantiza reproducción una sola vez.
 
 clc; clear; close all;
 
-%% ---------------- 1) Selección / carga del archivo --------------------
-% Cambia aquí por una ruta absoluta si prefieres (p. ej. '/Users/.../cancion.mp3')
+%% 1) Cargar archivo MP3
 archivoMusica = "/Users/alexandermunoznava/Downloads/totoAfrica.mp3";
 
-% Si el archivo no existe en la ruta dada, abrir diálogo para elegir archivo
 if ~isfile(archivoMusica)
-    [file, path] = uigetfile({'*.mp3;*.wav','Audio Files (*.mp3,*.wav)'}, ...
-                             'Selecciona el archivo de música');
+    [file, path] = uigetfile({'*.mp3','Archivos MP3'}, 'Seleccionar canción');
     if isequal(file,0)
-        error('No se seleccionó archivo. Coloca el MP3 en la carpeta o usa ruta absoluta.');
+        error("No se seleccionó archivo.");
     end
-    archivoMusica = fullfile(path,file);
+    archivoMusica = fullfile(path, file);
 end
 
-% Intentar leer el archivo
-try
-    [x, Fs] = audioread(archivoMusica);
-catch ME
-    error('Error leyendo el archivo con audioread: %s\nComprueba que el archivo exista y tenga formato compatible.', ME.message);
-end
+[x, Fs] = audioread(archivoMusica);
 
-% Convertir a mono si viene estéreo
+% Convertir a mono
 if size(x,2) > 1
-    x = mean(x,2);
+    x = mean(x, 2);
 end
 
-% Normalizar amplitud
+% Normalizar y asegurar tipo double
 if max(abs(x)) > 0
     x = x / max(abs(x));
 end
-
-%% ---------------- 2) Parámetros del modulador / demodulador ------------
-% Elegimos una portadora representativa; se remuestreará si Fs no la permite.
-fc = 300e3;            % Frecuencia de portadora deseada (300 kHz)
-max_allowable_fc = floor(Fs/2) - 1; % por Nyquist
-
-% Si la Fs original no permite representar fc, remuestreamos
-if Fs <= 2*fc
-    % Determinar nueva Fs práctica: usar factor de oversampling sobre 2*fc
-    % Elegimos Fs_new = max(Fs, ceil(5*fc)) -> 5 veces fc suele ser suficiente
-    Fs_new = max(Fs, ceil(5*fc));
-    fprintf('Fs original = %d Hz no puede representar fc=%d Hz.\n', Fs, round(fc));
-    fprintf('Remuestreando a Fs_new = %d Hz para permitir la portadora...\n', Fs_new);
-    x = resample(x, Fs_new, Fs);   % remuestreo
-    Fs = Fs_new;
-else
-    fprintf('Fs original = %d Hz es suficiente para fc = %d Hz.\n', Fs, round(fc));
-end
+x = double(x);
 
 N = length(x);
 t = (0:N-1)'/Fs;
 
-%% ---------------- 3) Modulación AM (DSB-SC) ---------------------------
-% Generamos portadora (coseno) con la nueva Fs
+%% 2) Selección automática de la portadora (cumple Nyquist)
+fc = round(0.4 * (Fs/2));  % seguro: fc < Fs/2
+fprintf("Fs = %d Hz -> fc seleccionada = %d Hz\n", Fs, fc);
+
 c = cos(2*pi*fc*t);
 
-% Señal modulada (producto)
+%% 3) Modulación AM (producto)
 xM = x .* c;
 
-%% ---------------- 4) Demodulación por multiplicación -----------------
-% Multiplicador (producto) - Señal demodulada antes de filtrar
+%% 4) Demodulación AM (producto)
 xD = xM .* c;
 
-%% ---------------- 5) Filtrado pasa-bajas para recuperar el mensaje ----
-% Elegimos cutoff según contenido musical (hasta 15 kHz típico); adaptativo:
-f_cutoff = min(15000, Fs/2*0.9);  % no superar Nyquist
-Wn = f_cutoff / (Fs/2);           % frecuencia normalizada para fir1
+%% 5) Filtrado pasa-bajas FIR
+filter_order = 128;
+f_cutoff = min(15000, Fs/2 * 0.9);  % corte en Hz (no superar Nyquist)
+Wn = f_cutoff / (Fs/2);
 
-filter_order = 128;               % orden del FIR (más alto = transición más nítida)
-b = fir1(filter_order, Wn, 'low');
-
-% Filtrado (con filter)
+b = fir1(filter_order, Wn, "low");
 xF = filter(b, 1, xD);
 
-%% ---------------- 6) Cálculo de FFTs centradas -----------------------
-f = (-N/2:N/2-1) * (Fs / N);
+%% 6) Corrección del retardo del filtro FIR
+delay = round(filter_order/2);
 
+if length(xF) > 2*delay
+    xF_rec = xF(delay+1:end-delay);
+else
+    xF_rec = xF; % señal muy corta → usar completa
+end
+
+% Normalizar salida recuperada (proteger contra división por cero)
+if max(abs(xF_rec)) > 0
+    xF_rec = xF_rec / max(abs(xF_rec));
+end
+
+%% 7) Reproducción de audio (una vez por señal)
+fprintf("▶ Reproduciendo señal ORIGINAL...\n");
+sound(x, Fs);
+pause(length(x)/Fs + 0.2);
+
+fprintf("▶ Reproduciendo señal RECUPERADA...\n");
+sound(xF_rec, Fs);
+pause(length(xF_rec)/Fs + 0.2);
+
+%% 8) FFTs y vectores de frecuencia (cada señal con su N)
+% Original y señales relacionadas (tienen longitud N)
 X  = abs(fftshift(fft(x)))  / N;
 XM = abs(fftshift(fft(xM))) / N;
 XD = abs(fftshift(fft(xD))) / N;
-XF = abs(fftshift(fft(xF))) / N;
+f_orig = (-N/2:N/2-1) * (Fs/N);  % vector frecuencia para las señales de longitud N
 
-%% ---------------- 7) Graficación (tiempo y frecuencia) ----------------
-% Tiempo: mostrar solo los primeros instantes para mejor visual (ajusta si quieres)
-tZoom = 0 : 1/Fs : min(0.05, (N-1)/Fs); % 50 ms o menos si la señal es corta
-idxZoom = 1 : min(length(tZoom), N);
+% Recuperada (puede tener distinta longitud Nrec)
+Nrec = length(xF_rec);
+XF_rec = abs(fftshift(fft(xF_rec))) / Nrec;
+f_rec = (-Nrec/2:Nrec/2-1) * (Fs / Nrec);
 
-figure('Name','Tiempo - modulacion/demodulacion (musica)','NumberTitle','off');
-subplot(4,1,1); plot(t(idxZoom), x(idxZoom)); title('Señal original (tiempo)'); xlabel('s'); ylabel('Amp'); grid on;
-subplot(4,1,2); plot(t(idxZoom), xM(idxZoom)); title('Señal modulada (tiempo)'); xlabel('s'); ylabel('Amp'); grid on;
-subplot(4,1,3); plot(t(idxZoom), xD(idxZoom)); title('Señal demodulada (tiempo)'); xlabel('s'); ylabel('Amp'); grid on;
-subplot(4,1,4); plot(t(idxZoom), xF(idxZoom)); title('Señal filtrada / recuperada (tiempo)'); xlabel('s'); ylabel('Amp'); grid on;
+%% 9) Gráficas
+% --- Tiempo (zoom 50 ms) ---
+tZoom = 0:1/Fs:min(0.05, (N-1)/Fs);
+idx = 1:length(tZoom);
 
-figure('Name','Frecuencia - modulacion/demodulacion (musica)','NumberTitle','off');
-subplot(4,1,1); plot(f, X); title('Espectro original'); xlim([-25e3 25e3]); grid on;
-subplot(4,1,2); plot(f, XM); title('Espectro modulada (mostrar alrededor de fc)'); xlim([fc-200e3 fc+200e3]); grid on;
-subplot(4,1,3); plot(f, XD); title('Espectro demodulada'); xlim([-50e3 50e3]); grid on;
-subplot(4,1,4); plot(f, XF); title('Espectro filtrada / recuperada'); xlim([-25e3 25e3]); grid on;
+figure("Name","Tiempo - Señales AM (Música)");
+subplot(4,1,1); plot(t(idx), x(idx));      title("Señal Original");  grid on;
+subplot(4,1,2); plot(t(idx), xM(idx));     title("Señal Modulada");  grid on;
+subplot(4,1,3); plot(t(idx), xD(idx));     title("Señal Demodulada");grid on;
+% Para la recuperada usamos su propio vector tiempo
+t_rec = (0:Nrec-1)'/Fs;
+lenPlotRec = min(length(t_rec), length(tRecClip(t_rec,0.05))); % segura
+subplot(4,1,4); plot(t_rec(1:min(length(t_rec),length(idx))), xF_rec(1:min(length(xF_rec),length(idx))));
+title("Señal Filtrada / Recuperada"); grid on;
+xlabel("Tiempo (s)"); ylabel("Amplitud");
 
-fprintf('Demodulador (canción) ejecutado correctamente.\n');
-fprintf('Archivo usado: %s\n', archivoMusica);
+% --- Frecuencia ---
+figure("Name","Frecuencia - Señales AM (Música)");
+subplot(4,1,1); plot(f_orig, X);  title("Espectro Original"); xlim([-25e3 25e3]); grid on;
+subplot(4,1,2); plot(f_orig, XM); title("Modulada (alrededor fc)"); xlim([fc-40e3 fc+40e3]); grid on;
+subplot(4,1,3); plot(f_orig, XD); title("Demodulada"); xlim([-40e3 40e3]); grid on;
+subplot(4,1,4); plot(f_rec, XF_rec); title("Recuperada"); xlim([-20e3 20e3]); grid on;
+
+fprintf("\nProceso finalizado correctamente.\nArchivo usado: %s\n", archivoMusica);
 
 end
 
+%% Helper local function (pequeño util para proteger plots de tiempo)
+function tOut = tRecClip(tVec, maxDur)
+% devuelve vector de tiempo hasta maxDur (o completo si es menor)
+if isempty(tVec)
+    tOut = tVec;
+    return;
+end
+idx = find(tVec <= maxDur);
+if isempty(idx)
+    tOut = tVec(1:min(1,end));
+else
+    tOut = tVec(1:idx(end));
+end
+end
